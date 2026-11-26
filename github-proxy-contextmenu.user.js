@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub 加速下载代理
 // @namespace    https://github.com/CC-Hua/github-proxy-contextmenu
-// @version      0.0.7
+// @version      0.0.8
 // @description  在任意页面的 GitHub 下载链接上按自定义键（默认鼠标中键），菜单中提供「GitHub 加速下载代理」，按 gh-proxy 官方转换规则加速 Release / Archive / Raw / Gist / API 下载，支持 5 条官方节点线路切换、复制加速链接与自定义前缀。
 // @author       CCHua
 // @icon         https://github.githubassets.com/pinned-octocat.svg
@@ -1030,7 +1030,11 @@
         if (matchTrigger(ev) && resolveTarget(ev)) ev.preventDefault();
     }
 
-    /** click：左键触发时阻止链接跳转；同时负责关闭菜单 */
+    /** click：左键触发时阻止链接跳转。
+     *  注意：此处绝不能关闭菜单——触发键（尤其是左键）在 mousedown 阶段
+     *  已弹出菜单，随后的 click 事件 target 仍是原链接，若在此 closeMenu()
+     *  会导致「按下弹出、松开即消失」，菜单项根本点不到。
+     *  关闭菜单统一由 mousedown（真实外部点击）负责，与浏览器原生菜单一致。 */
     function onClickCapture(ev) {
         if (cfg.enabled && matchTrigger(ev)) {
             if (!(UI.menu && UI.menu.contains(ev.target))
@@ -1039,13 +1043,17 @@
                 ev.preventDefault();
             }
         }
-        if (UI.menu && !UI.menu.contains(ev.target)) closeMenu();
     }
 
-    /** contextmenu：右键不再被接管，原生菜单始终放行 */
+    /** contextmenu：右键不再被接管，原生菜单始终放行。
+     *  若右键本身是触发键，此处不得关闭菜单（菜单已在 mousedown 阶段弹出）。 */
     function onContextMenu(ev) {
         if (!cfg.enabled) return;
-        if (UI.menu && !UI.menu.contains(ev.target)) closeMenu();
+        if (UI.menu && UI.menu.contains(ev.target)) return;
+        if (UI.overlay && UI.overlay.contains(ev.target)) return;
+        // 右键作为触发键时，菜单由 mousedown 打开，此处不能关闭
+        if (matchTrigger(ev)) return;
+        if (UI.menu) closeMenu();
     }
 
     function onKeyDown(ev) {
