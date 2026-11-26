@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub 加速下载代理
 // @namespace    https://github.com/CC-Hua/github-proxy-contextmenu
-// @version      0.0.6
+// @version      0.0.7
 // @description  在任意页面的 GitHub 下载链接上按自定义键（默认鼠标中键），菜单中提供「GitHub 加速下载代理」，按 gh-proxy 官方转换规则加速 Release / Archive / Raw / Gist / API 下载，支持 5 条官方节点线路切换、复制加速链接与自定义前缀。
 // @author       CCHua
 // @icon         https://github.githubassets.com/pinned-octocat.svg
@@ -374,7 +374,11 @@
         overlay: null,
         point: { x: 0, y: 0 },
         current: null,
-        guard: false
+        guard: false,
+        // 同一次点击的 mousedown + auxclick 都可能到达，用事件时间戳去重：
+        // 只忽略「紧随其后、同一按钮」的重复事件，不影响用户真实的连续点击
+        lastTriggerAt: 0,
+        lastTriggerBtn: -1
     };
 
     function rootNode() {
@@ -973,22 +977,27 @@
             && (!!ev.metaKey === !!t.meta);
     }
 
-    /** mousedown 捕获：触发菜单 或 关闭已有菜单 */
-    function onMouseDownCapture(ev) {
+    /** 实际触发菜单：由 mousedown 或 auxclick 调用，短窗口内去重 */
+    function tryTrigger(ev) {
         if (!cfg.enabled) return;
-
-        // 已有菜单：点击菜单外部则关闭
-        if (UI.menu && !UI.menu.contains(ev.target)) closeMenu();
-        if (UI.menu && UI.menu.contains(ev.target)) return;   // 菜单内部交给自己的 click
-        if (UI.overlay && UI.overlay.contains(ev.target)) return;
         if (UI.guard) return;
         if (!matchTrigger(ev)) return;
+        if (UI.menu && UI.menu.contains(ev.target)) return;   // 菜单内部交给自己的 click
+        if (UI.overlay && UI.overlay.contains(ev.target)) return;
+
+        var now = Date.now();
+        // 同一次点击的两个事件间隔通常 <10ms；用 30ms 窗口去重，
+        // 且只在按钮相同时去重，避免误伤真实连续点击
+        if (UI.lastTriggerBtn === ev.button && now - UI.lastTriggerAt < 30) return;
 
         var info = resolveTarget(ev);
         if (!info) return;                        // 未命中下载链接 → 放行浏览器默认行为
 
-        ev.preventDefault();                      // 阻止中键滚动/新标签、左键跳转等默认行为
+        ev.preventDefault();                      // 阻止中键新标签、左键跳转等默认行为
         ev.stopPropagation();
+
+        UI.lastTriggerAt = now;
+        UI.lastTriggerBtn = ev.button;
 
         UI.guard = true;
         try {
@@ -998,12 +1007,27 @@
         }
     }
 
-    /** auxclick：中键会默认在新标签打开链接，命中时必须阻止 */
+    /** mousedown 捕获：触发菜单 或 关闭已有菜单（左键/右键主通道） */
+    function onMouseDownCapture(ev) {
+        if (!cfg.enabled) return;
+
+        // 已有菜单：点击菜单外部则关闭
+        if (UI.menu && !UI.menu.contains(ev.target)) closeMenu();
+        tryTrigger(ev);
+    }
+
+    /**
+     * auxclick 捕获：中键触发的关键入口。
+     * Chrome 对 <a> 标签的中键点击只派发 auxclick，不派发 mousedown，
+     * 因此必须在此处也调用 tryTrigger，否则「中键触发」完全失效。
+     */
     function onAuxClickCapture(ev) {
-        if (!cfg.enabled || !matchTrigger(ev)) return;
+        if (!cfg.enabled) return;
         if (UI.menu && UI.menu.contains(ev.target)) return;
         if (UI.overlay && UI.overlay.contains(ev.target)) return;
-        if (resolveTarget(ev)) ev.preventDefault();
+        tryTrigger(ev);
+        // 兜底：即使菜单已开或去重拦截，命中下载链接的中键仍要阻止新标签打开
+        if (matchTrigger(ev) && resolveTarget(ev)) ev.preventDefault();
     }
 
     /** click：左键触发时阻止链接跳转；同时负责关闭菜单 */
