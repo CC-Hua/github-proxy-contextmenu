@@ -77,7 +77,7 @@ TM 每次检查只拉取 1.1 KB 的元数据文件，而不是整份脚本。手
 
 **为什么不用右键？** 网页脚本无法向浏览器原生右键菜单追加菜单项；脚本接管右键会与浏览器内置菜单（在新标签打开、复制链接地址、检查等）冲突。改用中键后，原生右键 100% 保留，脚本菜单与浏览器菜单互不干扰。
 
-中键触发时脚本会拦截 `auxclick`，阻止浏览器默认的「中键在新标签打开链接」行为。
+中键触发时脚本会拦截 `auxclick`，阻止浏览器默认的「中键在新标签打开链接」行为。由于 Chrome 对链接的中键点击只派发 `auxclick` 而不派发 `mousedown`，本脚本同时在两个事件上监听触发，并用 30ms 窗口去重——这是中键触发能正常工作的必要条件。
 
 ## 加速规则
 
@@ -116,10 +116,11 @@ TM 每次检查只拉取 1.1 KB 的元数据文件，而不是整份脚本。手
 
 Tampermonkey 没有向浏览器原生右键菜单追加菜单项的 API（那是浏览器扩展 `contextMenus` 权限的能力）。本脚本改用自定义触发：
 
-1. `document-start` 阶段在 `document` 上以捕获方式监听 `mousedown`；
+1. `document-start` 阶段在 `document` 上以捕获方式监听 `mousedown` 与 `auxclick`；
 2. 用 `event.composedPath()` 逐层回溯，定位命中的 `<a href>`，可穿透 Shadow DOM；
 3. 当按钮与修饰键精确匹配配置、且命中 GitHub 下载资源时，`preventDefault` + `stopPropagation` 并绘制菜单；未命中则完全放行浏览器默认行为；
-4. 另监听 `auxclick`（阻止中键新标签打开）与 `click`（左键触发时阻止跳转）；右键 `contextmenu` 事件全程不接管。
+4. **中键触发的关键**：Chrome 对 `<a>` 标签的中键点击只派发 `auxclick`、不派发 `mousedown`。因此触发逻辑必须同时挂在 `mousedown` 与 `auxclick` 两个事件上，否则中键完全失效；两者用 30ms 窗口去重；
+5. `click` 事件用于左键触发时阻止跳转；右键 `contextmenu` 事件全程不接管。
 
 ## 隐私与安全
 
