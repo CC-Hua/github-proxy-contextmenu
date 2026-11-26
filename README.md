@@ -120,7 +120,8 @@ Tampermonkey 没有向浏览器原生右键菜单追加菜单项的 API（那是
 2. 用 `event.composedPath()` 逐层回溯，定位命中的 `<a href>`，可穿透 Shadow DOM；
 3. 当按钮与修饰键精确匹配配置、且命中 GitHub 下载资源时，`preventDefault` + `stopPropagation` 并绘制菜单；未命中则完全放行浏览器默认行为；
 4. **中键触发的关键**：Chrome 对 `<a>` 标签的中键点击只派发 `auxclick`、不派发 `mousedown`。因此触发逻辑必须同时挂在 `mousedown` 与 `auxclick` 两个事件上，否则中键完全失效；两者用 30ms 窗口去重；
-5. `click` 事件用于左键触发时阻止跳转；右键 `contextmenu` 事件全程不接管。
+5. `click` 事件用于左键触发时阻止跳转；右键 `contextmenu` 事件全程不接管；
+6. **菜单关闭时机**：菜单在 `mousedown` 阶段弹出，随后紧随的 `click` 事件 target 仍是原链接——若在 `click` 里关闭菜单，会导致「按下弹出、松开即消失」，菜单项根本点不到。因此关闭菜单只由 `mousedown`（真实外部点击）负责。
 
 ## 隐私与安全
 
