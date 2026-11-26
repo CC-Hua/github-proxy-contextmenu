@@ -1,9 +1,8 @@
 // ==UserScript==
 // @name         GitHub 加速下载代理（右键菜单）
-// @name:en      GitHub Proxy Context Menu
 // @namespace    https://github.com/CC-Hua/github-proxy-contextmenu
-// @version      0.0.3
-// @description  在任意页面的 GitHub 下载链接上右键，菜单中提供「GitHub 加速下载代理」，按 gh-proxy 官方转换规则加速 Release / Archive / Raw / Gist / API 下载，支持 5 条官方节点线路切换、复制加速链接与自定义前缀。
+// @version      0.0.4
+// @description  在任意页面的 GitHub 下载链接上按自定义键（默认鼠标中键），菜单中提供「GitHub 加速下载代理」，按 gh-proxy 官方转换规则加速 Release / Archive / Raw / Gist / API 下载，支持 5 条官方节点线路切换、复制加速链接与自定义前缀。
 // @author       CCHua
 // @icon         https://github.githubassets.com/pinned-octocat.svg
 // @icon64       https://github.githubassets.com/pinned-octocat.svg
@@ -26,17 +25,18 @@
  * Tampermonkey 无「向浏览器原生右键菜单追加项」的 API（属浏览器扩展
  * contextMenus 权限）。因此本脚本采用等效方案：
  *
- *   1. document-start 阶段在 document 上以捕获方式监听 contextmenu；
- *   2. 用 event.composedPath() 逐层回溯，找到命中的 <a href>（穿透 Shadow DOM）；
- *   3. 判定该地址是否为 GitHub 可下载资源，命中则 preventDefault +
- *      stopPropagation 接管右键，绘制仿原生菜单；未命中则完全放行原生菜单。
+ * 触发方式（v0.0.4 起）：
+ *   默认用「鼠标中键」在 GitHub 下载链接上按下即可弹出菜单，彻底避开
+ *   浏览器原生右键菜单。触发键与修饰键组合可在设置面板中自定义：
+ *     - 触发按钮：左键 / 中键 / 右键
+ *     - 修饰键：Shift / Alt / Ctrl / Meta（需精确匹配，避免误触）
+ *   实现：document 捕获阶段监听 mousedown，匹配按钮 + 修饰键且命中
+ *   下载链接时 preventDefault + stopPropagation；同时拦截 auxclick
+ *   （阻止中键在新标签打开链接）与 click（左键触发时阻止跳转）。
+ *   右键不再被接管——浏览器原生菜单在任何场景下都完全可用。
  *
- * 返回浏览器原生右键（两种通道）：
- *   浏览器只允许 trusted 的 contextmenu 事件唤起原生菜单，脚本无法主动弹出。
- *   因此提供：
- *   a) 菜单项「返回浏览器原生右键」——点击后预授权「下一次在同一链接右键」
- *      直接放行，不 preventDefault，由浏览器显示原生菜单（一次性）。
- *   b) 修饰键直通——按住 Shift / Alt / Ctrl / Meta 右键，立即放行原生菜单。
+ * 链接识别：用 event.composedPath() 逐层回溯找到命中的 <a href>（穿透 Shadow DOM），
+ * 判定是否为 GitHub 可下载资源后才接管，否则一律放行浏览器默认行为。
  *
  * 加速规则（完全对齐 gh-proxy.com 官方转换器的输出）：
  *
@@ -94,7 +94,9 @@
     var DEFAULT_CFG = {
         enabled: true,
         proxyId: 'v4.gh-proxy.org',
-        customPrefix: ''
+        customPrefix: '',
+        // 触发方式：button 0=左键 1=中键 2=右键；mods 为必须按住的修饰键（精确匹配）
+        trigger: { button: 1, shift: false, alt: false, ctrl: false, meta: false }
     };
 
     // 已是代理/镜像地址时不再二次加速
@@ -160,6 +162,17 @@
             cfg.proxyId = DEFAULT_CFG.proxyId;
             changed = true;
         }
+        // v0.0.4 新增触发配置：旧配置缺该字段时补默认值
+        if (!cfg.trigger || typeof cfg.trigger !== 'object') {
+            cfg.trigger = Object.assign({}, DEFAULT_CFG.trigger);
+            changed = true;
+        } else {
+            var t = cfg.trigger;
+            if ([0, 1, 2].indexOf(t.button) < 0) { t.button = DEFAULT_CFG.trigger.button; changed = true; }
+            ['shift', 'alt', 'ctrl', 'meta'].forEach(function (k) {
+                if (typeof t[k] !== 'boolean') { t[k] = false; changed = true; }
+            });
+        }
         if (changed) saveCfg();
     })();
 
@@ -183,6 +196,17 @@
             if (PROXIES[i].id === cfg.proxyId) return PROXIES[i].label;
         }
         return PROXIES[0].label;
+    }
+
+    function triggerLabel() {
+        var t = cfg.trigger || DEFAULT_CFG.trigger;
+        var btn = ['左键', '中键', '右键'][t.button] || '中键';
+        var mods = [];
+        if (t.shift) mods.push('Shift');
+        if (t.alt) mods.push('Alt');
+        if (t.ctrl) mods.push('Ctrl');
+        if (t.meta) mods.push('Meta');
+        return (mods.length ? mods.join('+') + '+' : '') + '鼠标' + btn;
     }
 
     /* ====================== 3. 链接识别与地址转换 ====================== */
@@ -323,6 +347,10 @@
         '.ghpcm-modal select:focus,.ghpcm-modal input[type=text]:focus{border-color:var(--ghpcm-accent)!important;}',
         '.ghpcm-modal input[type=checkbox]{width:15px!important;height:15px!important;margin:0!important;',
         'accent-color:var(--ghpcm-accent);cursor:pointer!important;}',
+        '.ghpcm-mods{flex:1 1 auto;display:flex!important;flex-wrap:wrap!important;gap:4px 10px!important;}',
+        '.ghpcm-mod{display:inline-flex!important;align-items:center!important;gap:4px!important;',
+        'font-size:11px!important;color:var(--ghpcm-fg)!important;white-space:nowrap!important;cursor:pointer!important;}',
+        '.ghpcm-mod input[type=checkbox]{width:14px!important;height:14px!important;}',
         '.ghpcm-note{font-size:11px!important;line-height:1.65!important;color:var(--ghpcm-muted)!important;',
         'margin:10px 0 0!important;padding:9px 10px!important;border-radius:7px!important;',
         'background:var(--ghpcm-hover)!important;}',
@@ -346,10 +374,7 @@
         overlay: null,
         point: { x: 0, y: 0 },
         current: null,
-        guard: false,
-        // 「返回浏览器原生右键」预授权：记录被授权的原始 href，
-        // 下一次在同一链接上右键时直接放行（浏览器只会为 trusted 事件弹原生菜单）
-        nativeNext: null
+        guard: false
     };
 
     function rootNode() {
@@ -605,18 +630,6 @@
                 });
             }
         });
-        addItem(list, {
-            label: '返回浏览器原生右键',
-            hint: '再次右键',
-            onClick: function () {
-                // 浏览器只允许 trusted 的 contextmenu 弹出原生菜单，脚本无法主动唤起。
-                // 因此预授权下一次右键：标记当前链接，用户再次右键时脚本直接放行。
-                UI.nativeNext = info.href;
-                closeMenu();
-                toast('请在此链接上再次右键，将显示浏览器原生菜单');
-            }
-        });
-
         addSep(list);
         addItem(list, {
             label: '切换加速线路',
@@ -737,18 +750,64 @@
 
         var subtitle = document.createElement('div');
         subtitle.className = 'ghpcm-ms';
-        subtitle.textContent = '右键 GitHub 下载链接即可看到加速菜单';
+        subtitle.textContent = '在 GitHub 下载链接上按触发键即可看到加速菜单';
 
         // 开关
         var rowEnable = document.createElement('div');
         rowEnable.className = 'ghpcm-row';
         var labEnable = document.createElement('label');
-        labEnable.textContent = '接管右键';
+        labEnable.textContent = '启用脚本';
         var chkEnable = document.createElement('input');
         chkEnable.type = 'checkbox';
         chkEnable.checked = !!cfg.enabled;
         rowEnable.appendChild(labEnable);
         rowEnable.appendChild(chkEnable);
+
+        // 触发按钮
+        var rowBtn = document.createElement('div');
+        rowBtn.className = 'ghpcm-row';
+        var labBtn = document.createElement('label');
+        labBtn.textContent = '触发按钮';
+        var selBtn = document.createElement('select');
+        [
+            { v: 1, t: '鼠标中键（默认）' },
+            { v: 0, t: '鼠标左键' },
+            { v: 2, t: '鼠标右键' }
+        ].forEach(function (o) {
+            var opt = document.createElement('option');
+            opt.value = String(o.v);
+            opt.textContent = o.t;
+            if (o.v === cfg.trigger.button) opt.selected = true;
+            selBtn.appendChild(opt);
+        });
+        rowBtn.appendChild(labBtn);
+        rowBtn.appendChild(selBtn);
+
+        // 修饰键（精确匹配）
+        var rowMods = document.createElement('div');
+        rowMods.className = 'ghpcm-row';
+        var labMods = document.createElement('label');
+        labMods.textContent = '同时按住';
+        var modsBox = document.createElement('div');
+        modsBox.className = 'ghpcm-mods';
+        [
+            { k: 'shift', t: 'Shift' },
+            { k: 'alt', t: 'Alt' },
+            { k: 'ctrl', t: 'Ctrl' },
+            { k: 'meta', t: 'Meta/Win' }
+        ].forEach(function (m) {
+            var wrap = document.createElement('label');
+            wrap.className = 'ghpcm-mod';
+            var cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = !!cfg.trigger[m.k];
+            cb.setAttribute('data-mod', m.k);
+            wrap.appendChild(cb);
+            wrap.appendChild(document.createTextNode(m.t));
+            modsBox.appendChild(wrap);
+        });
+        rowMods.appendChild(labMods);
+        rowMods.appendChild(modsBox);
 
         // 线路
         var rowProxy = document.createElement('div');
@@ -781,7 +840,9 @@
 
         var note = document.createElement('div');
         note.className = 'ghpcm-note';
-        note.innerHTML = '加速规则：在原始地址前拼接代理前缀，代理侧流式转发并跟随 302 重定向。'
+        note.innerHTML = '触发方式：在 GitHub 下载链接上按住设定的修饰键并按触发按钮。'
+            + '默认「鼠标中键」且无修饰键；右键不被接管，浏览器原生菜单始终可用。'
+            + '加速规则：在原始地址前拼接代理前缀，代理侧流式转发并跟随 302 重定向。'
             + '<code>https://v4.gh-proxy.org/https://github.com/owner/repo/releases/download/v1.0/a.zip</code>'
             + '默认使用官网转换器标注的推荐节点 v4.gh-proxy.org；'
             + '自定义前缀优先于默认线路，留空即使用默认线路。'
@@ -797,8 +858,13 @@
         btnReset.textContent = '恢复默认';
         btnReset.addEventListener('click', function () {
             cfg = Object.assign({}, DEFAULT_CFG);
+            cfg.trigger = Object.assign({}, DEFAULT_CFG.trigger);
             saveCfg();
             chkEnable.checked = cfg.enabled;
+            selBtn.value = String(cfg.trigger.button);
+            [].forEach.call(modsBox.querySelectorAll('input[data-mod]'), function (cb) {
+                cb.checked = !!cfg.trigger[cb.getAttribute('data-mod')];
+            });
             selProxy.value = cfg.proxyId;
             inpCustom.value = '';
             toast('已恢复默认设置');
@@ -826,9 +892,13 @@
             cfg.enabled = !!chkEnable.checked;
             cfg.proxyId = selProxy.value;
             cfg.customPrefix = custom;
+            cfg.trigger = { button: parseInt(selBtn.value, 10) };
+            [].forEach.call(modsBox.querySelectorAll('input[data-mod]'), function (cb) {
+                cfg.trigger[cb.getAttribute('data-mod')] = !!cb.checked;
+            });
             saveCfg();
             closeSettings();
-            toast('设置已保存');
+            toast('设置已保存：' + triggerLabel());
         });
 
         actions.appendChild(btnReset);
@@ -839,6 +909,8 @@
         card.appendChild(title);
         card.appendChild(subtitle);
         card.appendChild(rowEnable);
+        card.appendChild(rowBtn);
+        card.appendChild(rowMods);
         card.appendChild(rowProxy);
         card.appendChild(rowCustom);
         card.appendChild(note);
@@ -882,36 +954,31 @@
         return null;
     }
 
-    function onContextMenu(ev) {
-        if (!cfg.enabled) return;
-        if (UI.guard) return;                     // 防止递归
-        if (UI.menu && UI.menu.contains(ev.target)) return;
-        if (UI.overlay && UI.overlay.contains(ev.target)) return;
+    /** 判断鼠标事件是否匹配用户配置的触发键（按钮 + 修饰键精确匹配） */
+    function matchTrigger(ev) {
+        var t = cfg.trigger || DEFAULT_CFG.trigger;
+        if (ev.button !== t.button) return false;
+        return (!!ev.shiftKey === !!t.shift)
+            && (!!ev.altKey === !!t.alt)
+            && (!!ev.ctrlKey === !!t.ctrl)
+            && (!!ev.metaKey === !!t.meta);
+    }
 
-        // 修饰键直通：按住 Shift / Alt / Ctrl 右键，立即放行浏览器原生菜单。
-        // 这是「返回原生右键」的即时通道，无需先弹出本脚本菜单。
-        if (ev.shiftKey || ev.altKey || ev.ctrlKey || ev.metaKey) {
-            UI.nativeNext = null;                  // 顺带清除一次性预授权
-            return;
-        }
+    /** mousedown 捕获：触发菜单 或 关闭已有菜单 */
+    function onMouseDownCapture(ev) {
+        if (!cfg.enabled) return;
+
+        // 已有菜单：点击菜单外部则关闭
+        if (UI.menu && !UI.menu.contains(ev.target)) closeMenu();
+        if (UI.menu && UI.menu.contains(ev.target)) return;   // 菜单内部交给自己的 click
+        if (UI.overlay && UI.overlay.contains(ev.target)) return;
+        if (UI.guard) return;
+        if (!matchTrigger(ev)) return;
 
         var info = resolveTarget(ev);
-        if (!info) {                               // 未命中 → 放行原生菜单
-            UI.nativeNext = null;                  // 目标已改变，预授权失效
-            return;
-        }
+        if (!info) return;                        // 未命中下载链接 → 放行浏览器默认行为
 
-        // 返回的原生右键：仅当下一次右键命中「同一链接」时才放行，避免误伤其他链接。
-        if (UI.nativeNext) {
-            if (UI.nativeNext === info.href) {
-                UI.nativeNext = null;
-                closeMenu();
-                return;                            // 不 preventDefault → 浏览器原生菜单
-            }
-            UI.nativeNext = null;                  // 换链接了，预授权作废
-        }
-
-        ev.preventDefault();
+        ev.preventDefault();                      // 阻止中键滚动/新标签、左键跳转等默认行为
         ev.stopPropagation();
 
         UI.guard = true;
@@ -922,10 +989,30 @@
         }
     }
 
-    function onMouseDown(ev) {
-        if (!UI.menu) return;
-        if (UI.menu.contains(ev.target)) return;
-        closeMenu();
+    /** auxclick：中键会默认在新标签打开链接，命中时必须阻止 */
+    function onAuxClickCapture(ev) {
+        if (!cfg.enabled || !matchTrigger(ev)) return;
+        if (UI.menu && UI.menu.contains(ev.target)) return;
+        if (UI.overlay && UI.overlay.contains(ev.target)) return;
+        if (resolveTarget(ev)) ev.preventDefault();
+    }
+
+    /** click：左键触发时阻止链接跳转；同时负责关闭菜单 */
+    function onClickCapture(ev) {
+        if (cfg.enabled && matchTrigger(ev)) {
+            if (!(UI.menu && UI.menu.contains(ev.target))
+                && !(UI.overlay && UI.overlay.contains(ev.target))
+                && resolveTarget(ev)) {
+                ev.preventDefault();
+            }
+        }
+        if (UI.menu && !UI.menu.contains(ev.target)) closeMenu();
+    }
+
+    /** contextmenu：右键不再被接管，原生菜单始终放行 */
+    function onContextMenu(ev) {
+        if (!cfg.enabled) return;
+        if (UI.menu && !UI.menu.contains(ev.target)) closeMenu();
     }
 
     function onKeyDown(ev) {
@@ -952,8 +1039,10 @@
     }
 
     function init() {
+        document.addEventListener('mousedown', onMouseDownCapture, true);
+        document.addEventListener('auxclick', onAuxClickCapture, true);
+        document.addEventListener('click', onClickCapture, true);
         document.addEventListener('contextmenu', onContextMenu, true);
-        document.addEventListener('mousedown', onMouseDown, true);
         document.addEventListener('keydown', onKeyDown, true);
         window.addEventListener('scroll', onViewportChange, true);
         window.addEventListener('resize', onViewportChange, true);
