@@ -2,7 +2,7 @@
 // @name         GitHub 加速下载代理（右键菜单）
 // @name:en      GitHub Proxy Context Menu
 // @namespace    https://github.com/CC-Hua/github-proxy-contextmenu
-// @version      0.0.1
+// @version      0.0.2
 // @description  在任意页面的 GitHub 下载链接上右键，菜单中提供「GitHub 加速下载代理」，按 gh-proxy 官方转换规则加速 Release / Archive / Raw / Gist / API 下载，支持 5 条官方节点线路切换、复制加速链接与自定义前缀。
 // @author       CCHua
 // @icon         https://github.githubassets.com/pinned-octocat.svg
@@ -15,8 +15,6 @@
 // @grant        GM_setValue
 // @grant        GM_setClipboard
 // @grant        GM_openInTab
-// @updateURL    https://raw.githubusercontent.com/CC-Hua/github-proxy-contextmenu/main/github-proxy-contextmenu.user.js
-// @downloadURL  https://raw.githubusercontent.com/CC-Hua/github-proxy-contextmenu/main/github-proxy-contextmenu.user.js
 // @license      MIT
 // ==/UserScript==
 
@@ -30,6 +28,13 @@
  *   2. 用 event.composedPath() 逐层回溯，找到命中的 <a href>（穿透 Shadow DOM）；
  *   3. 判定该地址是否为 GitHub 可下载资源，命中则 preventDefault +
  *      stopPropagation 接管右键，绘制仿原生菜单；未命中则完全放行原生菜单。
+ *
+ * 返回浏览器原生右键（两种通道）：
+ *   浏览器只允许 trusted 的 contextmenu 事件唤起原生菜单，脚本无法主动弹出。
+ *   因此提供：
+ *   a) 菜单项「返回浏览器原生右键」——点击后预授权「下一次在同一链接右键」
+ *      直接放行，不 preventDefault，由浏览器显示原生菜单（一次性）。
+ *   b) 修饰键直通——按住 Shift / Alt / Ctrl / Meta 右键，立即放行原生菜单。
  *
  * 加速规则（完全对齐 gh-proxy.com 官方转换器的输出）：
  *
@@ -339,7 +344,10 @@
         overlay: null,
         point: { x: 0, y: 0 },
         current: null,
-        guard: false
+        guard: false,
+        // 「返回浏览器原生右键」预授权：记录被授权的原始 href，
+        // 下一次在同一链接上右键时直接放行（浏览器只会为 trusted 事件弹原生菜单）
+        nativeNext: null
     };
 
     function rootNode() {
@@ -593,6 +601,17 @@
                     closeMenu();
                     toast(ok ? '已复制原始链接' : '复制失败，请手动复制');
                 });
+            }
+        });
+        addItem(list, {
+            label: '返回浏览器原生右键',
+            hint: '再次右键',
+            onClick: function () {
+                // 浏览器只允许 trusted 的 contextmenu 弹出原生菜单，脚本无法主动唤起。
+                // 因此预授权下一次右键：标记当前链接，用户再次右键时脚本直接放行。
+                UI.nativeNext = info.href;
+                closeMenu();
+                toast('请在此链接上再次右键，将显示浏览器原生菜单');
             }
         });
 
@@ -867,8 +886,28 @@
         if (UI.menu && UI.menu.contains(ev.target)) return;
         if (UI.overlay && UI.overlay.contains(ev.target)) return;
 
+        // 修饰键直通：按住 Shift / Alt / Ctrl 右键，立即放行浏览器原生菜单。
+        // 这是「返回原生右键」的即时通道，无需先弹出本脚本菜单。
+        if (ev.shiftKey || ev.altKey || ev.ctrlKey || ev.metaKey) {
+            UI.nativeNext = null;                  // 顺带清除一次性预授权
+            return;
+        }
+
         var info = resolveTarget(ev);
-        if (!info) return;                        // 未命中 → 放行原生菜单
+        if (!info) {                               // 未命中 → 放行原生菜单
+            UI.nativeNext = null;                  // 目标已改变，预授权失效
+            return;
+        }
+
+        // 返回的原生右键：仅当下一次右键命中「同一链接」时才放行，避免误伤其他链接。
+        if (UI.nativeNext) {
+            if (UI.nativeNext === info.href) {
+                UI.nativeNext = null;
+                closeMenu();
+                return;                            // 不 preventDefault → 浏览器原生菜单
+            }
+            UI.nativeNext = null;                  // 换链接了，预授权作废
+        }
 
         ev.preventDefault();
         ev.stopPropagation();
