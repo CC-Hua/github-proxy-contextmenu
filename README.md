@@ -34,7 +34,18 @@
 2. 直接点击仓库 Raw 文件安装：`github-proxy-contextmenu.user.js`。
 3. 或打开 Tampermonkey 控制面板 → 新建脚本 → 粘贴本仓库脚本全文 → 保存。
 
-脚本头部已声明 `@updateURL` / `@downloadURL`，后续版本可通过 Tampermonkey 自动检查更新。
+脚本头部已声明 `@updateURL`（指向 `.meta.js`）与 `@downloadURL`（指向完整脚本），后续版本可通过 Tampermonkey 自动检查更新。
+
+### 更新机制
+
+| 文件 | 体积 | 角色 |
+|---|---|---|
+| `github-proxy-contextmenu.meta.js` | 约 1.1 KB | 更新检查地址（`@updateURL`），只含元数据头，TM 读取其中的 `@version` |
+| `github-proxy-contextmenu.user.js` | 约 40 KB | 脚本本体，检测到新版后从 `@downloadURL` 下载安装 |
+
+TM 每次检查只拉取 1.1 KB 的元数据文件，而不是整份脚本。手动触发：猴子图标 → 管理面板 → 选中脚本 → 检查更新；检查频率可在设置 → 通用 → 更新检查频率中调整。
+
+> 注意：若本地已安装过 `v1.x` / `v2.x` 的早期版本，由于版本号回退，TM 不会提示更新，需卸载后重新安装。
 
 ## 使用
 
